@@ -11,6 +11,7 @@ from datetime import datetime
 import hashlib
 
 # --- 1. إعدادات الاتصال والأمان ---
+# تهيئة عميل Supabase
 supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
 # إعداد خوادم Google لضمان عمل البث عبر شبكات الهاتف (STUN Servers)
@@ -21,11 +22,12 @@ RTC_CONFIGURATION = RTCConfiguration(
 # --- 2. معالجة الصور (المنطق البرمجي) ---
 def enhance_image(frame):
     yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    yuv[:,:,0] = clahe.apply(yuv[:,:,0])
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
     return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
 
-# بوابة الدخول (نفس منطق الأمان السابق)
+# --- 3. بوابة الدخول (الأمان) ---
+# يجب أن يكون هذا الكود في بداية التنفيذ ليوقف التطبيق إذا لم يكن المشرف مسجلاً
 if "password_correct" not in st.session_state:
     st.title("🔐 بوابة المشرفين")
     pwd = st.text_input("كلمة المرور:", type="password")
@@ -33,36 +35,38 @@ if "password_correct" not in st.session_state:
         if hashlib.sha256(pwd.encode()).hexdigest() == hashlib.sha256(config.ADMIN_PASSWORD.encode()).hexdigest():
             st.session_state["password_correct"] = True
             st.rerun()
-        else: st.error("خطأ!")
-    st.stop()
+        else:
+            st.error("خطأ!")
+    st.stop()  # <--- مهم جداً: يوقف الكود هنا إذا لم يدخل المشرف
 
-# --- 3. واجهة المشرف بعد الدخول ---
+# --- 4. واجهة المشرف بعد الدخول الناجح ---
 st.title("👨‍🏫 رصد الحضور (وضع تطبيق الهاتف)")
-
 subject = st.text_input("📖 المادة الحالية:", value="البرمجة")
 
 # تهيئة الذاكرة المؤقتة لمنع التكرار
-if 'session_attended' not in st.session_state: st.session_state.session_attended = set()
+if 'session_attended' not in st.session_state:
+    st.session_state.session_attended = set()
 
-# تحميل بيانات الطلاب
-students_raw = supabase.table("students").select("*").execute().data
+# ✅ تم نقل استعلام قاعدة البيانات إلى هنا (بعد التحقق من الدخول)
+students_raw = []
+try:
+    students_raw = supabase.table("students").select("*").execute().data
+    if students_raw:
+        st.success(f"تم تحميل بيانات {len(students_raw)} طالب بنجاح.")
+    else:
+        st.warning("لا يوجد طلاب مسجلين في قاعدة البيانات.")
+except Exception as e:
+    st.error(f"فشل الاتصال بقاعدة البيانات: {e}")
 
-# وظيفة معالجة الفيديو (هذا الجزء سيعمل داخل المتصفح/APK)
+# --- 5. وظيفة معالجة الفيديو ---
 def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
-    
-    # 1. تحسين الإضاءة
+    # 1. تحسين الإضاءة (الميزة السابقة محفوظة)
     img = enhance_image(img)
-    
-    # 2. تحويل الصورة لـ MediaPipe
-    rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
-    
-    # (هنا يتم وضع منطق التعرف على الوجوه كما في الكود السابق)
-    # ملاحظة: في WebRTC نكتفي بإرجاع الصورة المحسنة للعرض
+    # 2. إرجاع الصورة المحسنة للعرض
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. مشغل الكاميرا المتوافق مع الأندرويد ---
+# --- 6. مشغل الكاميرا المتوافق مع الأندرويد ---
 webrtc_ctx = webrtc_streamer(
     key="attendance-check",
     mode=WebRtcMode.SENDRECV,
